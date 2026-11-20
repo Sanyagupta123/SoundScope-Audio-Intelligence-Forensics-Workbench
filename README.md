@@ -1,10 +1,19 @@
-# SceneMind
+# SoundScope
 
-SceneMind turns an image into YOLO object detections, a geometry-based spatial scene graph, grounded descriptions, graph-backed questions, and approximate two-image change comparisons. The frontend and API are separate applications.
+SoundScope is a local audio intelligence workbench for inspecting recordings with transparent signal processing, optional pretrained sound classification, silence intervals, comparison and persistent analysis history. It is designed as an analysis aid; features and model scores do not establish the identity or source of a sound.
+
+## Features
+
+- Upload and validate WAV, FLAC and MP3 recordings (25 MB, 120 seconds).
+- Decode to mono and resample the analysis signal to 16 kHz; preserve the original for playback.
+- RMS, zero crossing, spectral centroid, bandwidth, rolloff and 13 MFCC coefficients.
+- Downsampled STFT magnitude spectrogram in decibels.
+- Frame RMS low-energy intervals and chunk-level AST predictions (top three per 10-second chunk).
+- Compare mean signal feature vectors, and store/reopen/delete analyses using SQLite.
 
 ## Run locally
 
-Requirements: Python 3.11+, Node.js 20+. From the repository root:
+Requires Python 3.11+, Node.js 20+, and a C/C++ build toolchain where Python wheels are unavailable. AST inference downloads model weights on first use; CPU inference is supported and can take time. Signal analysis remains available if model initialization fails.
 
 ```powershell
 cd backend
@@ -14,7 +23,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-In another terminal:
+In a second terminal:
 
 ```powershell
 cd frontend
@@ -22,28 +31,39 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The first analysis downloads the pretrained `yolo11n.pt` weights through Ultralytics (network access is required once); the model is cached by Ultralytics and loaded once per server process. Set `SCENEMIND_MODEL` to a compatible local Ultralytics weight path. No weights or user images are stored by this application.
+Open http://localhost:5173. API docs are at http://localhost:8000/docs.
 
-API docs: http://localhost:8000/docs. Health: http://localhost:8000/api/health.
+## Configuration
+
+Copy `backend/.env.example` to `backend/.env` and configure the environment before starting the API. Audio and SQLite data are kept in `backend/uploads` and `backend/soundscope.db` by default. Delete recordings from Analysis History when no longer needed. `.env` files are ignored by Git.
 
 ## API
 
-* `POST /api/analyze` — multipart `file`, optional `confidence` from 0 to 1.
-* `POST /api/ask` — JSON `{ "question": "...", "scene": <analysis response> }`.
-* `POST /api/compare` — multipart `image_a`, `image_b`, and optional `confidence`.
-
-Accepted image formats are content-validated JPEG, PNG and WEBP. Uploads are limited to 5 MB, 8192 pixels on either side and 30 megapixels. Files are read in memory and are not exposed or persisted. Relationship scores are geometry heuristics, not model probabilities; boxes cannot establish actions such as holding or sitting on. Image comparison matches labels and normalized positions approximately.
+See [docs/API.md](docs/API.md). The browser uploads a recording, then requests its analysis. Classification failure is reported separately while signal processing remains available.
 
 ## Architecture
 
-`backend/app/detector.py` lazily loads and reuses pretrained YOLO. `scene.py` validates image content, calculates normalized features and IoU, infers evidenced geometric edges, builds a NetworkX graph, serializes it, and answers questions. `main.py` exposes validated FastAPI endpoints. `frontend/src/App.jsx` coordinates upload, confidence threshold, synchronized object selection, image overlays, Cytoscape graph, questions, and comparison. Vite proxies API calls to the local backend.
+```text
+React/Vite ── /api ── FastAPI ── validation / preprocessing / DSP
+                               ├── optional lazy AST pipeline
+                               └── SQLite metadata + local audio files
+```
+
+## Model and limitations
+
+Model: `MIT/ast-finetuned-audioset-10-10-0.4593` from Hugging Face Transformers. Its outputs describe ten-second chunk classifications, not frame-level sound event detection or speech recognition. Confidence scores are not guarantees. No speaker identification is provided. Low-energy interval detection is threshold-based and may classify quiet content as silence. Similarity compares normalized average signal features and does not prove a common recording source. No noise reduction is applied.
+
+No benchmark metrics are claimed. Evaluation needs a labeled, held-out dataset and a documented class mapping; see [docs/ML_PIPELINE.md](docs/ML_PIPELINE.md).
+
+## Security
+
+Uploaded bytes are size-limited and decoded before acceptance. Stored filenames are generated UUIDs; original display filenames never form storage paths. Audio is untrusted, local data and is not exposed by filesystem path. The local API is intended for trusted development environments; production deployments should add authentication, quotas and managed retention.
 
 ## Tests
 
 ```powershell
 cd backend
-pip install -r requirements.txt
 pytest
 ```
 
-Unit tests exercise geometry, graph edge cases, and grounded question handling without loading YOLO. Useful images can be any locally available JPEG, PNG, or WEBP under 5 MB; no sample imagery is redistributed.
+Tests cover DSP calculations, silence intervals, endpoint validation, persistence and comparisons without downloading model weights.
